@@ -1,0 +1,293 @@
+/*******************************
+***** SECTION 1 - OPTIONS *****
+*******************************/
+
+options {
+    IGNORE_CASE = false;
+    MULTI=true;
+    VISITOR = true;
+    NODE_DEFAULT_VOID = true;
+}
+
+/*********************************
+***** SECTION 2 - USER CODE *****
+*********************************/
+PARSER_BEGIN(CALParser)
+
+import java.io.*;
+import java.util.*;
+
+public class CALParser
+{
+
+  public static void main(String[] args) throws ParseException, FileNotFoundException
+  {
+
+    if (args.length < 1)
+    {
+      System.out.println("Please pass in the filename.");
+      System.exit(1);
+    }
+
+    CALParser parser = new CALParser(new FileInputStream(args[0]));
+
+    SimpleNode root = parser.Prog();
+
+    System.out.println("Abstract Syntax Tree:");
+
+    root.dump(" ");
+
+    System.out.println();
+    SemanticCheck sc = new SemanticCheck();
+    root.jjtAccept(sc, null);
+    System.out.println();
+//    System.out.println("Three Address Code");
+//    ThreeAddressHandler cb = new ThreeAddressHandler();
+//    root.jjtAccept(cb, null);
+  }
+}
+PARSER_END(CALParser)
+/*****************************************
+***** SECTION 3 - TOKEN DEFINITIONS *****
+*****************************************/
+
+TOKEN_MGR_DECLS :
+{
+static int commentNesting = 0;
+}
+
+SKIP : /*** Ignoring spaces/tabs/newlines ***/
+{
+    " "
+    | "\t"
+    | "\n"
+    | "\r"
+    | "\f"
+}
+
+SKIP : /* MULTI LINE COMMENTS */
+{
+    "/*" { commentNesting++; } : IN_MULTICOMMENT
+}
+
+SKIP : // SKIP ONE LINE
+{
+    <"//" (~["\n"])* "\n">
+}
+
+<IN_MULTICOMMENT> SKIP :
+{
+    "/*" { commentNesting++; }
+    | "*/" { commentNesting--;
+    if (commentNesting == 0)
+        SwitchTo(DEFAULT);
+    }
+    | <~[]>
+}
+
+TOKEN : /* Keywords and punctuation */
+{
+    < SEMIC : ";" >
+    | < COLON : ":" >
+    | < PLUS_SIGN : "+" >
+    | < MINUS_SIGN : "-" >
+    | < TILDE :  "~" >
+    | < PIPE : "|" >
+    | < AMP : "&" >
+    | < EQUAL : "=" >
+    | < NOT_EQU : "!=" >
+    | < LESS_THAN : "<" >
+    | < LESS_THAN_EQ : "<=" >
+    | < GREAT_THAN : ">" >
+    | < GREAT_THAN_EQ : ">=" >
+    | < ASSIGN : ":=" >
+    | < LBR : "(" >
+    | < RBR : ")" >
+    | < COMMA : "," >
+    | < VARIABLE : "variable" >
+    | < CONSTANT : "constant" >
+    | < RETURN : "return" >
+    | < INTEGER : "integer" >
+    | < BOOLEAN : "boolean" >
+    | < VOID : "void" >
+    | < MAIN : "main" >
+    | < IF : "if" >
+    | < ELSE : "else" >
+    | < TRUE : "true" >
+    | < FALSE : "false" >
+    | < WHILE : "while" >
+    | < BEGIN : "begin" >
+    | < END : "end" >
+    | < IS : "is" >
+    | < SK : "skip" >
+}
+
+TOKEN : /* Numbers and identifiers */
+{
+< NUM : "0" | (<MINUS_SIGN>)(["1" - "9"])*(<DIGIT>)* | ["1" - "9"](<DIGIT>)* >
+| < DIGIT : ["0" - "9"] >
+| < ID : <LETTER> ( <LETTER> | <DIGIT> | <UNDERSC> )* >
+| < UNDERSC : "_" >
+| < LETTER : ["a" - "z", "A" - "Z"] >
+}
+
+/***********************************
+***** SECTION 4 - THE GRAMMAR *****
+***********************************/
+
+SimpleNode Prog() #Prog : {}
+{
+    DeclarationList() FunctionList() #FunctionList  Main() <EOF> {return jjtThis;}
+}
+
+void DeclarationList() : {}
+{
+    (Declaration()<SEMIC>DeclarationList() | {})
+}
+
+void Declaration() : {}
+{
+    VariableDeclaration()
+    | ConstantDeclaration()
+}
+
+void VariableDeclaration() #Variable : {Token t; String type; String id;}
+{
+    t = <VARIABLE> id = id() <COLON> type = Type() {jjtThis.value = t.image;}
+}
+
+void ConstantDeclaration() #Constant : {Token t; String id; String type;}
+{
+    t = <CONSTANT> id = id() <COLON> type = Type() assign() {jjtThis.value = t.image;}
+}
+
+void FunctionList() : {}
+{
+    (Function()FunctionList() | {})
+}
+
+void Function() #Function : {String type; String id; String retVal;}
+{
+    type = Type() id = id() <LBR> (ParameterList()) <RBR> <IS>
+    DeclarationList()
+    <BEGIN>
+    StatementBlock() #StatementBlock
+    Return()
+    <END>
+}
+
+void Return() #Return : {}
+{
+    <RETURN> <LBR>(Expression() | {})<RBR><SEMIC>
+}
+
+String Type() #Type : {Token t;}
+{
+    (t = <INTEGER> | t = <BOOLEAN> | t = <VOID>)
+    {jjtThis.value = t.image; return t.image;}
+}
+
+void ParameterList(): {}
+{
+    (NempParameterList() (<COMMA> NempParameterList())* | {}) #NempParameterList(>0)
+}
+
+void NempParameterList() : {String id; String type;}
+{
+    id = id() <COLON> type = Type() #Parameter(2)
+}
+
+void Main() #Main : {}
+{
+    <MAIN>
+    <BEGIN>
+    DeclarationList()
+    StatementBlock()
+    <END>
+}
+
+void StatementBlock() : {}
+{
+    (Statement() StatementBlock()) | {}
+}
+
+void Statement() #Statement : {Token t;}
+{
+    id() (assign() | <LBR>ArgList()<RBR> #FunctionCall(2)) <SEMIC>
+    | <BEGIN> StatementBlock() <END>
+    | t = <IF> Condition() <BEGIN> StatementBlock() <END>
+      <ELSE> <BEGIN> StatementBlock() <END> {jjtThis.value = t.image;}
+    | t = <WHILE> Condition() <BEGIN> StatementBlock() <END> {jjtThis.value = t.image;}
+    | <SK><SEMIC>
+}
+
+void assign() #Assign(2) : {Token t;}
+{
+    t = <ASSIGN> Expression() {jjtThis.value = t.image;}
+}
+
+void Expression() : {}
+{
+    Fragment() BinaryArithOp()
+    | <LBR>Expression()<RBR> BinaryArithOp()
+}
+
+void BinaryArithOp() : {Token t;}
+{
+    t = <PLUS_SIGN> Expression() {jjtThis.value = t.image;} #Add(2)
+    | t = <MINUS_SIGN> Expression() {jjtThis.value = t.image;} #Subtract(2)
+    | {}
+}
+
+void Fragment() : {Token t;}
+{
+    Fragment2()
+    | t = <MINUS_SIGN> id() {jjtThis.value = t.image;} #MinusNum(1)
+    | t = <NUM> {jjtThis.value = t.image;} #Num
+    | t = <TRUE> {jjtThis.value = t.image;} #True
+    | t = <FALSE> {jjtThis.value = t.image;} #False
+}
+
+void Fragment2() : {}
+{
+    id() (<LBR> ArgList() <RBR> #FunctionCall(2) | {})
+}
+
+void Condition() : {}
+{
+  (<TILDE> Condition() Condition2())
+  | (<LBR> Condition() <RBR> Condition2())
+  | (Expression() ComparisonOp() Condition2())
+}
+
+void Condition2() : {Token t;}
+{
+   t = <PIPE> Condition() {jjtThis.value = t.image;} #Or(2)
+  | t = <AMP> Condition() {jjtThis.value = t.image;} #And(2)
+  | {}
+}
+
+void ComparisonOp() : {Token t;}
+{
+    t = <EQUAL> Expression() {jjtThis.value = t.image;} #Equal(2)
+    | t = <NOT_EQU> Expression() {jjtThis.value = t.image;} #NotEqual(2)
+    | t = <LESS_THAN> Expression() {jjtThis.value = t.image;} #LessThan(2)
+    | t = <LESS_THAN_EQ> Expression() {jjtThis.value = t.image;} #LessThanEq(2)
+    | t = <GREAT_THAN> Expression() {jjtThis.value = t.image;} #GreaterThan(2)
+    | t = <GREAT_THAN_EQ> Expression() {jjtThis.value = t.image;} #GreaterThanEq(2)
+}
+void ArgList() #ArgList :{}
+{
+    NempArgList() | {}
+}
+
+void NempArgList() : {}
+{
+    id() #Arg(1) (<COMMA> NempArgList())?
+}
+
+
+String id() #ID : {Token t;}
+{
+    t = <ID> {jjtThis.value = t.image; return t.image;}
+}
